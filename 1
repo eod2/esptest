@@ -1,0 +1,198 @@
+
+    local camera = workspace.CurrentCamera
+    local runService = game:GetService("RunService")
+    local espObjects = {}
+    local viewportPoint = camera.WorldToViewportPoint
+    
+    function vector2Floor(vector)
+        return Vector2.new(math.floor(vector.X), math.floor(vector.Y))
+    end
+    
+    function cframeToViewport(cframe)
+        local position, onScreen = viewportPoint(camera, cframe.Position)
+        return Vector2.new(position.X, position.Y), position.Z > 0 and onScreen
+    end
+    
+    local ESPObject = {}
+    ESPObject.__index = ESPObject
+    
+    function ESPObject.new(player)
+        local self = setmetatable({}, ESPObject)
+        self.player = player
+        self.boxDrawings = {}
+        
+        for i = 1, 8 do
+            self.boxDrawings[i] = Drawing.new("Line")
+        end
+    
+        self.nameDrawing = Drawing.new("Text")
+        self.nameDrawing.Size = 15
+        self.nameDrawing.Center = true
+        self.nameDrawing.Outline = true
+    
+        self.tracer = Drawing.new("Line")
+        
+        return self
+    end
+    
+    function ESPObject:GetBoxSize(rootPartCFrame)
+        if esp.BoxDynamic then
+            local characterSize = esp.CharacterSize
+            if esp.UseBoundingBox then
+                local _, boundingBoxSize = self.player.Character:GetBoundingBox()
+                characterSize = boundingBoxSize
+            end
+            
+            local center, visible = cframeToViewport(rootPartCFrame)
+            if not visible then return Vector2.new(0, 0) end
+            
+            local right, _ = cframeToViewport(rootPartCFrame * CFrame.new(characterSize.X / 2, 0, 0))
+            local top, _ = cframeToViewport(rootPartCFrame * CFrame.new(0, characterSize.Y / 2, 0))
+            
+            local width = math.abs(right.X - center.X) * 2
+            local height = math.abs(top.Y - center.Y) * 2
+            
+            return Vector2.new(width, height)
+        else
+            local distance = (camera.CFrame.p - rootPartCFrame.p).magnitude
+            local scale = 1 / (distance / 3 * math.tan(math.rad(camera.FieldOfView / 2)) * 2) * 1000
+            return Vector2.new(scale * esp.BoxStaticXFactor, scale * esp.BoxStaticYFactor)
+        end
+    end
+    
+    function getRainbowColor()
+        local hue = tick() * esp.RainbowSpeed % 1
+        return Color3.fromHSV(hue, 1, 1)
+    end
+    
+    function ESPObject:Update()
+        local character = self.player.Character
+        local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+    
+        if not rootPart or not character.Parent then
+            self:HideESP()
+            return
+        end
+    
+        local distance = (camera.CFrame.p - rootPart.Position).magnitude
+        if distance > esp.MaxDistance then
+            self:HideESP()
+            return
+        end
+    
+        local screenPosition, visible = cframeToViewport(rootPart.CFrame * esp.CharacterOffset)
+        if not visible then
+            self:HideESP()
+            return
+        end
+    
+        local boxSize = self:GetBoxSize(rootPart.CFrame)
+        local boxPosition = vector2Floor(screenPosition - boxSize / 2)
+        
+        -- Apply rainbow color if enabled
+        local color = esp.RainbowEnabled and getRainbowColor() or esp.BoxColor
+    
+        self:DrawBox(boxPosition, boxSize, color)
+        self:DrawTracer(screenPosition, color)
+        self:DrawName(boxPosition, boxSize, color)
+    end
+    
+    function ESPObject:DrawBox(position, size, color)
+        local segmentLength = size.X / 3
+    
+        local corners = {
+            position,
+            position + Vector2.new(size.X, 0),
+            position + Vector2.new(0, size.Y),
+            position + size
+        }
+    
+        local segments = {
+            {corners[1], corners[1] + Vector2.new(segmentLength, 0)},
+            {corners[1], corners[1] + Vector2.new(0, segmentLength)},
+            {corners[2], corners[2] - Vector2.new(segmentLength, 0)},
+            {corners[2], corners[2] + Vector2.new(0, segmentLength)},
+            {corners[3], corners[3] + Vector2.new(segmentLength, 0)},
+            {corners[3], corners[3] - Vector2.new(0, segmentLength)},
+            {corners[4], corners[4] - Vector2.new(segmentLength, 0)},
+            {corners[4], corners[4] - Vector2.new(0, segmentLength)}
+        }
+    
+        for i, segment in ipairs(segments) do
+            local line = self.boxDrawings[i]
+            line.From = segment[1]
+            line.To = segment[2]
+            line.Color = color
+            line.Thickness = esp.BoxThickness
+            line.Visible = esp.BoxEnabled
+        end
+    end
+    
+    function ESPObject:DrawTracer(position, color)
+        if esp.TracerEnabled then
+            self.tracer.From = Vector2.new(camera.ViewportSize.X / 2, camera.ViewportSize.Y)
+            self.tracer.To = position
+            self.tracer.Color = color
+            self.tracer.Thickness = esp.BoxThickness
+            self.tracer.Visible = true
+        else
+            self.tracer.Visible = false
+        end
+    end
+    
+    function ESPObject:DrawName(position, size, color)
+        if esp.NameEnabled then
+            self.nameDrawing.Position = Vector2.new(position.X + size.X / 2, position.Y - 15)
+            self.nameDrawing.Text = self.player.Name
+            self.nameDrawing.Color = color
+            self.nameDrawing.Visible = true
+        else
+            self.nameDrawing.Visible = false
+        end
+    end
+    
+    function ESPObject:HideESP()
+        for _, line in pairs(self.boxDrawings) do
+            line.Visible = false
+        end
+        self.tracer.Visible = false
+        self.nameDrawing.Visible = false
+    end
+    
+    local function UpdateESP()
+        if not esp.MasterSwitch then
+            for _, espObj in pairs(espObjects) do
+                espObj:HideESP()
+            end
+            return
+        end
+    
+        for _, player in ipairs(game.Players:GetPlayers()) do
+            if player ~= game.Players.LocalPlayer and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+                if not espObjects[player] then
+                    espObjects[player] = ESPObject.new(player)
+                end
+                espObjects[player]:Update()
+            elseif espObjects[player] then
+                espObjects[player]:HideESP()
+            end
+        end
+    end
+    
+    game.Players.PlayerAdded:Connect(function(player)
+        player.CharacterAdded:Connect(function()
+            if not espObjects[player] then
+                espObjects[player] = ESPObject.new(player)
+            end
+        end)
+    end)
+    
+    game.Players.PlayerRemoving:Connect(function(player)
+        if espObjects[player] then
+            espObjects[player]:HideESP()
+            espObjects[player] = nil
+        end
+    end)
+    
+    runService.RenderStepped:Connect(UpdateESP)
+    
